@@ -1262,8 +1262,36 @@ TEST_F(XModemTests, XMODEM_RECEIVE_ABORT_TRANSFER)
   EXPECT_EQ(XMODEM_RECEIVE_INITIAL, xmodem_receive_state());
 
   uint32_t timestamp = 0;
+  int i;
 
-  //TODO: Implement unit tests here
+  // retry after 5 timeouts
+  for (i = 0; i < 6; i++) {
+    receiver_requested_outbound_size = 0;
+    receiver_outbound_buffer[0] = 0;
+
+    EXPECT_EQ(true, xmodem_receive_process(timestamp++));
+    EXPECT_EQ(XMODEM_RECEIVE_SEND_C, xmodem_receive_state());
+
+    EXPECT_EQ(true, xmodem_receive_process(timestamp++));
+
+    EXPECT_EQ(1, receiver_requested_outbound_size);
+    EXPECT_EQ(C, receiver_outbound_buffer[0]);
+
+    EXPECT_EQ(true, xmodem_receive_process(timestamp+1500));
+    EXPECT_EQ(XMODEM_RECEIVE_WAIT_FOR_ACK, xmodem_receive_state());
+
+    EXPECT_EQ(true, xmodem_receive_process(timestamp+3000+1));
+    EXPECT_EQ(XMODEM_RECEIVE_TIMEOUT_ACK, xmodem_receive_state());
+
+    timestamp += (3000 + 1);
+  }
+
+  EXPECT_EQ(true, xmodem_receive_process(timestamp++));
+  EXPECT_EQ(XMODEM_RECEIVE_ABORT_TRANSFER, xmodem_receive_state());
+
+  // abort is final state
+  EXPECT_EQ(true, xmodem_receive_process(timestamp+100000));
+  EXPECT_EQ(XMODEM_RECEIVE_ABORT_TRANSFER, xmodem_receive_state());
 
   EXPECT_EQ(true, xmodem_receive_cleanup());
 }

@@ -11,6 +11,8 @@ static bool (*callback_write_data)(const uint32_t requested_size, uint8_t *buffe
 
 static xmodem_receive_state_t receive_state;
 
+static const uint32_t  RECEIVE_ACK_TIMEOUT     = 3000; // 3 seconds
+static const uint8_t   RECEIVE_ACK_MAX_RETRIES = 5;
 static const uint32_t  READ_BLOCK_TIMEOUT      = 60000; // 60 seconds
 static uint8_t         control_character       = 0;
 static uint32_t        returned_size           = 0;
@@ -19,6 +21,7 @@ static uint8_t         *payload_buffer         = 0;
 static uint32_t        payload_buffer_position = 0;
 static uint32_t        payload_size            = 0;
 static uint8_t         current_packet_id       = 0;
+static uint8_t         ack_retries       = 0;
 static xmodem_packet_t current_packet;
 
 
@@ -39,7 +42,8 @@ bool xmodem_receive_init()
        0 != callback_read_data &&
        0 != callback_write_data)
    {
-      receive_state   = XMODEM_RECEIVE_INITIAL;
+      receive_state = XMODEM_RECEIVE_INITIAL;
+      ack_retries   = 0;
       result = true;
    }
 
@@ -78,19 +82,54 @@ bool xmodem_receive_process(const uint32_t current_time)
 
       case XMODEM_RECEIVE_SEND_C:
       {
+         stopwatch = current_time;
+         control_character = C;
+         bool result = false;
+         callback_write_data(1, &control_character, &result);
          receive_state = XMODEM_RECEIVE_WAIT_FOR_ACK;
          break;
       }
 
       case XMODEM_RECEIVE_WAIT_FOR_ACK:
       {
-         //TODO: check time and transition on received ACK or timeout
+         if (current_time > (stopwatch + RECEIVE_ACK_TIMEOUT))
+         {
+            receive_state = XMODEM_RECEIVE_TIMEOUT_ACK;
+         }
+         else
+         {
+             if (!callback_is_inbound_empty())
+             {
+                callback_read_data(1, &inbound, &returned_size);
+
+                if (returned_size > 0)
+                {
+                   if (SOH == inbound)
+                   {
+                       receive_state = XMODEM_RECEIVE_ACK_SUCCESS;
+                   } else if (EOT == inbound)
+                   {
+                       receive_state = XMODEM_RECEIVE_TRANSFER_COMPLETE;
+                   }
+                }
+             }
+         }
          break;
       }
 
       case XMODEM_RECEIVE_TIMEOUT_ACK:
       { 
          //TODO: implement retry logic, if more than 5 retries goto ABORT_TRANSFER
+         if (RECEIVE_ACK_MAX_RETRIES <= (ack_retries))
+         {
+           receive_state = XMODEM_RECEIVE_ABORT_TRANSFER;
+         }
+         else
+         {
+           receive_state = XMODEM_RECEIVE_SEND_C;
+           stopwatch = current_time;
+           ++ack_retries;
+         }
          break;
       }
 
@@ -164,9 +203,10 @@ bool xmodem_receive_process(const uint32_t current_time)
 
       case XMODEM_RECEIVE_BLOCK_ACK:
       {
-          //TODO: send ACK
-          stopwatch = current_time;  // start the stopwatch to watch for a TRANSFER_ACK TIMEOUT
           receive_state = XMODEM_RECEIVE_WAIT_FOR_ACK;
+          control_character = ACK;
+          bool result = false;
+          callback_write_data(1, &control_character, &result);
           break;
       }
 
